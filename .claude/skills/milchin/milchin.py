@@ -71,8 +71,10 @@
 """
 
 import argparse
+import os
 import re
 import sys
+import tempfile
 import unicodedata
 
 # ---------------------------------------------------------------------------
@@ -859,6 +861,65 @@ SELFTESTS = [
 ]
 
 
+def _run_cli_selftests():
+    """CLI-уровневые проверки --in-place (файловый ввод/вывод, не proofread).
+    Возвращает (passed, failed, log_lines)."""
+    passed = failed = 0
+    log = []
+
+    def ok(cond, desc):
+        nonlocal passed, failed
+        if cond:
+            passed += 1
+            log.append("PASS  {}".format(desc))
+        else:
+            failed += 1
+            log.append("FAIL  {}".format(desc))
+
+    dirty = 'Он сказал "привет" - и ушёл...'
+    d = tempfile.mkdtemp(prefix="milchin-selftest-")
+    try:
+        fpath = os.path.join(d, "draft.md")
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(dirty)
+        expected, _ = proofread(dirty)
+
+        # 1) --in-place пишет исправленный текст в тот же файл
+        rc = main(["--fix", "--in-place", "--file", fpath])
+        after = open(fpath, encoding="utf-8").read()
+        ok(rc == 0 and after == expected and after != dirty,
+           "--in-place записал исправленный текст в файл")
+
+        # 2) идемпотентность: повторный прогон не меняет файл
+        rc2 = main(["--fix", "--in-place", "--file", fpath])
+        after2 = open(fpath, encoding="utf-8").read()
+        ok(rc2 == 0 and after2 == after, "--in-place идемпотентен (повторный прогон — 0 правок)")
+
+        # 3) отказ без --file (argparse.error → SystemExit)
+        raised = False
+        try:
+            main(["--fix", "--in-place"])
+        except SystemExit:
+            raised = True
+        ok(raised, "--in-place без --file — отказ")
+
+        # 4) отказ вместе с --check
+        raised2 = False
+        try:
+            main(["--check", "--in-place", "--file", fpath])
+        except SystemExit:
+            raised2 = True
+        ok(raised2, "--in-place с --check — отказ")
+    finally:
+        try:
+            for fn in os.listdir(d):
+                os.remove(os.path.join(d, fn))
+            os.rmdir(d)
+        except OSError:
+            pass
+    return passed, failed, log
+
+
 def run_selftest():
     passed = failed = 0
     for desc, src, expected, kwargs in SELFTESTS:
@@ -874,13 +935,35 @@ def run_selftest():
             print("        вход:    {!r}".format(src))
             print("        ожидал:  {!r}".format(expected))
             print("        получил: {!r}".format(got))
-    print("\n{} PASS, {} FAIL из {}".format(passed, failed, len(SELFTESTS)))
-    return failed == 0
+    cli_passed, cli_failed, cli_log = _run_cli_selftests()
+    for line in cli_log:
+        print(line)
+    total = len(SELFTESTS) + cli_passed + cli_failed
+    print("\n{} PASS, {} FAIL из {} (вкл. {} CLI --in-place)".format(
+        passed + cli_passed, failed + cli_failed, total, cli_passed + cli_failed))
+    return (failed + cli_failed) == 0
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _atomic_write(path, text):
+    """Атомарная запись: tmp-файл рядом + os.replace. Не оставляет полу-записанный
+    файл при сбое; идемпотентность и наборы правил — целиком в proofread()."""
+    d = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         prog="milchin",
@@ -896,6 +979,9 @@ def main(argv=None):
                       help="исправленный текст в stdout + сводка в stderr")
     mode.add_argument("--selftest", action="store_true",
                       help="прогнать встроенные тесты, вывести PASS/FAIL")
+    p.add_argument("--in-place", action="store_true",
+                   help="записать результат в тот же файл (только с --fix --file; "
+                        "атомарно через tmp+os.replace; сводка в stderr)")
     p.add_argument("--percent-space", action="store_true",
                    help="T7: NBSP перед %% (дефолт: слитно)")
     p.add_argument("--no-initials-space", action="store_true",
@@ -904,6 +990,12 @@ def main(argv=None):
 
     if args.selftest:
         return 0 if run_selftest() else 1
+
+    if args.in_place:
+        if not args.file:
+            p.error("--in-place требует --file (нечего писать на месте)")
+        if args.check or args.report:
+            p.error("--in-place совместим только с --fix (запись на месте)")
 
     if args.file:
         with open(args.file, "r", encoding="utf-8") as f:
@@ -924,6 +1016,12 @@ def main(argv=None):
 
     if args.report:
         sys.stdout.write(fixed)
+        for line in c.summary_lines():
+            print(line, file=sys.stderr)
+        return 0
+
+    if args.in_place:
+        _atomic_write(args.file, fixed)
         for line in c.summary_lines():
             print(line, file=sys.stderr)
         return 0
