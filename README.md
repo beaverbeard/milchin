@@ -10,6 +10,9 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill-da7756.svg)](https://docs.claude.com/en/docs/claude-code/overview)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 
+**In English.** Milchin is a deterministic typographer for **Russian-language text**: «guillemets» and „quotes“, em/en dashes, non-breaking spaces, units and Unicode hygiene — 30+ unambiguous rules. Claude runs the bundled script `milchin.py` locally (Python 3.8+, standard library only) on a file or on pasted text; with `--in-place` it rewrites the given file. No network access, no LLM calls inside the script.
+
+
 Даёте текст или путь к файлу — Claude прогоняет встроенный скрипт `milchin.py`,
 который применяет более 30 однозначных правил русской типографики и юникод-гигиены.
 Возвращает исправленный текст и сводку по рядам правил (T/D/W/S).
