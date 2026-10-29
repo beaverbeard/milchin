@@ -580,7 +580,8 @@ def rule_T6_number_unit(text, c):
     угловые градусы (20°) обрабатывает S6 (слитно) до этого правила.
     """
     n = [0]
-    plain = [u for u in UNIT_TOKENS if u != DEGREE]
+    # % ведёт T7 (слитно/NBSP по флагу); здесь NBSP перед % был бы снят T7 — фантомная правка.
+    plain = [u for u in UNIT_TOKENS if u not in (DEGREE, "%")]
     units = "|".join(re.escape(u) for u in sorted(plain, key=len, reverse=True))
     pat = re.compile(r"(\d)\x20?(" + units + r")(?![\w])")
 
@@ -1098,6 +1099,7 @@ SELFTESTS = [
     ("TG10 ISO-дата без флага не трогать", "дата 2026-06-09 ок", None, {}),
     ("TG10 ISO-дата (флаг)", "дата 2026-06-09 ок", "дата 09.06.2026 ок", {"iso_dates": True}),
     ("TG10 имя файла с датой не трогать (флаг)", "файл 2026-10-29_отчёт.md", None, {"iso_dates": True}),
+    ("T6/T7 проценты слитно — без фантомных правок", "со скилом 95%, без него 75%", None, {}),
     ("zone: TG в коде и URL не трогать", "`a!!b` http://a.com/2020-2021?x=1,,2",
      None, {}),
 ]
@@ -1165,10 +1167,12 @@ def _run_cli_selftests():
 def run_selftest():
     passed = failed = 0
     for desc, src, expected, kwargs in SELFTESTS:
-        if expected is None:  # None = текст не должен меняться
+        unchanged = expected is None  # None = текст не должен меняться
+        if unchanged:
             expected = src
-        got, _ = proofread(src, **kwargs)
-        if got == expected:
+        got, cnt = proofread(src, **kwargs)
+        # без изменений — и счётчик 0: иначе отчёт врёт о правках (фантомные пары правил)
+        if got == expected and not (unchanged and cnt.total()):
             passed += 1
             print("PASS  {}".format(desc))
         else:
@@ -1177,6 +1181,8 @@ def run_selftest():
             print("        вход:    {!r}".format(src))
             print("        ожидал:  {!r}".format(expected))
             print("        получил: {!r}".format(got))
+            if got == expected:
+                print("        счётчик: {} правок при неизменном тексте".format(cnt.total()))
     cli_passed, cli_failed, cli_log = _run_cli_selftests()
     for line in cli_log:
         print(line)
